@@ -5,6 +5,8 @@
 // Handles node registration, heartbeats, job routing, and HTTP API.
 // =============================================================================
 
+import 'dotenv/config';
+
 import { WebSocketServer, WebSocket } from 'ws';
 import { config } from '@terminus/config';
 import {

@@ -8,6 +8,7 @@ import { handleAgentRoutes } from './agent-routes.js';
 import { nodeRegistry } from './registry.js';
 import { logger } from './logger.js';
 import { getAllAgents, getAgentState } from './agent-store.js';
+import { createPlan, summarizeResults } from './orchestrator.js';
 
 const HTTP_PORT = parseInt(process.env.HTTP_PORT ?? '3000', 10);
 
@@ -115,6 +116,71 @@ async function handleStatus(res: ServerResponse): Promise<void> {
 }
 
 // =============================================================================
+// Chat with LLM (Grok)
+// =============================================================================
+
+async function handleChat(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    if (req.method !== 'POST') {
+        sendError(res, 405, 'Method not allowed');
+        return;
+    }
+
+    try {
+        const body = await parseBody(req) as { message?: string; timeout?: number };
+
+        if (!body.message) {
+            sendError(res, 400, 'Missing "message" field');
+            return;
+        }
+
+        logger.info('HTTP', `💬 Chat: "${body.message.slice(0, 50)}..."`);
+
+        // Step 1: Create plan using Grok
+        const plan = await createPlan(body.message);
+        logger.info('HTTP', `📋 Plan: ${plan.steps.length} steps`);
+
+        // Step 2: Execute each step on nodes
+        const results: Record<string, unknown> = {};
+
+        for (const step of plan.steps) {
+            logger.info('HTTP', `⚡ Executing: ${step.tool}(${JSON.stringify(step.params).slice(0, 30)}...)`);
+
+            const jobResult = await dispatchJob({
+                input: step.params,
+                timeout: body.timeout ?? 15000,
+            });
+
+            // Add toolCall info so node knows to use tools.ts
+            if (jobResult.result) {
+                results[step.id] = {
+                    tool: step.tool,
+                    success: jobResult.success,
+                    output: jobResult.result.output,
+                };
+            }
+        }
+
+        // Step 3: Summarize results using Grok
+        const summary = await summarizeResults(plan, results);
+
+        logger.info('HTTP', `✅ Chat complete`);
+
+        sendJson(res, 200, {
+            success: true,
+            message: summary,
+            plan: {
+                reasoning: plan.systemContext,
+                steps: plan.steps.map(s => ({ tool: s.tool, params: s.params })),
+            },
+            results,
+        });
+    } catch (error) {
+        logger.error('HTTP', `Chat error: ${(error as Error).message}`);
+        sendError(res, 500, (error as Error).message);
+    }
+}
+
+// =============================================================================
 // HTTP Server
 // =============================================================================
 
@@ -142,6 +208,8 @@ const server = createServer(async (req, res) => {
         // Other routes
         if (url === '/api/run' || url === '/api/run/') {
             await handleRun(req, res);
+        } else if (url === '/api/chat' || url === '/api/chat/') {
+            await handleChat(req, res);
         } else if (url === '/api/status' || url === '/api/status/') {
             await handleStatus(res);
         } else if (url === '/' || url === '/health') {
@@ -157,6 +225,7 @@ const server = createServer(async (req, res) => {
 export function startHttpServer(): void {
     server.listen(HTTP_PORT, () => {
         logger.info('HTTP', `🌐 HTTP API on port ${HTTP_PORT}`);
+        logger.info('HTTP', `   POST /api/chat - Chat with Grok LLM`);
         logger.info('HTTP', `   POST /api/run - Submit job`);
         logger.info('HTTP', `   GET  /api/status - Cluster status`);
         logger.info('HTTP', `   GET  /api/agents - List agents`);

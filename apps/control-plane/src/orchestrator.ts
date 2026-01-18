@@ -6,12 +6,48 @@
 
 import { createXai } from '@ai-sdk/xai';
 import { generateText } from 'ai';
+import { readFileSync, existsSync } from 'fs';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
 import { logger } from './logger.js';
 
-// Initialize xAI client
-const xai = createXai({
-    apiKey: process.env.XAI_API_KEY,
-});
+// Load API key from .env file
+function getApiKey(): string {
+    if (process.env.XAI_API_KEY) return process.env.XAI_API_KEY;
+
+    // Try multiple possible locations for .env
+    const paths = [
+        join(process.cwd(), '.env'),
+        join(process.cwd(), 'terminus-core', '.env'),
+        '/Users/cansecilmis/Downloads/antigravity/terminus-root/terminus-core/.env',
+    ];
+
+    for (const envPath of paths) {
+        try {
+            if (existsSync(envPath)) {
+                const content = readFileSync(envPath, 'utf-8');
+                const match = content.match(/XAI_API_KEY=(.+)/);
+                if (match) {
+                    logger.info('Orchestrator', `📁 Loaded key from ${envPath}`);
+                    return match[1].trim();
+                }
+            }
+        } catch { }
+    }
+
+    return '';
+}
+
+// Lazy initialization of xAI client
+let _xai: ReturnType<typeof createXai> | null = null;
+function getXai() {
+    if (!_xai) {
+        const key = getApiKey();
+        logger.info('Orchestrator', `🔑 API Key: ${key ? key.slice(0, 10) + '...' : 'MISSING'}`);
+        _xai = createXai({ apiKey: key });
+    }
+    return _xai;
+}
 
 export interface OrchestrationPlan {
     originalPrompt: string;
@@ -56,7 +92,7 @@ export async function createPlan(userPrompt: string): Promise<OrchestrationPlan>
 
     try {
         const result = await generateText({
-            model: xai('grok-3-mini'),
+            model: getXai()('grok-3-mini'),
             system: `You are an AI orchestrator for the Terminus platform.
 Your job is to break down user requests into specific tool calls.
 ${TOOLS_DESCRIPTION}
@@ -123,7 +159,7 @@ export async function summarizeResults(
 
     try {
         const result = await generateText({
-            model: xai('grok-3-mini'),
+            model: getXai()('grok-3-mini'),
             system: 'Summarize the results of tool calls for the user. Be concise and helpful.',
             prompt: `Original request: "${plan.originalPrompt}"
 
