@@ -9,6 +9,7 @@ import { logger } from '../logger.js';
 import { getPaymentConfig } from './config.js';
 import { creditAgent, getAgentAddress } from './wallet-generator.js';
 import { distributeToAgentsOnChain } from './onchain-transfer.js';
+import { nodeRegistry } from '../registry.js';
 
 // =============================================================================
 // Types
@@ -135,7 +136,9 @@ export async function distributePayment(
     } else {
         // Internal ledger only
         agentPayments = agentIds.map(agentId => {
-            const wallet = getAgentAddress(agentId);
+            // Try to get wallet from registered node first, fall back to generated
+            const nodeWithAgent = nodeRegistry.getNodesForAgent(agentId)[0];
+            const wallet = nodeWithAgent?.wallet || getAgentAddress(agentId);
             creditAgent(agentId, perAgentAmount);
 
             const agentTx: PaymentTransaction = {

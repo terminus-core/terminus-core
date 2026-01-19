@@ -9,6 +9,7 @@ import { ethers } from 'ethers';
 import { logger } from '../logger.js';
 import { getPaymentConfig } from './config.js';
 import { getAgentAddress } from './wallet-generator.js';
+import { nodeRegistry } from '../registry.js';
 
 // USDC ERC20 ABI (minimal)
 const USDC_ABI = [
@@ -94,7 +95,9 @@ export async function distributeToAgentsOnChain(
     const results: DistributionResult[] = [];
 
     for (const agentId of agentIds) {
-        const address = getAgentAddress(agentId);
+        // Try to get wallet from registered node first, fall back to generated
+        const nodeWithAgent = nodeRegistry.getNodesForAgent(agentId)[0];
+        const address = nodeWithAgent?.wallet || getAgentAddress(agentId);
         const result = await transferUSDC(address, perAgentAmount);
 
         results.push({
