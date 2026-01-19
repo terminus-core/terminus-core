@@ -41,6 +41,7 @@ export interface AuthMessage extends BaseMessage {
         capabilities: string[];       // ['python-3.10', 'docker', 'nvidia-gpu']
         agentTypes?: string[];        // ['travel-planner', 'budget-planner'] - agents this node can run
         wallet?: string;              // Wallet address for payments (optional)
+        walletSignature?: string;     // Signature proving wallet ownership: sign("terminus-auth:{nodeId}")
         specs: {                      // Machine specifications
             os: string;
             arch: string;

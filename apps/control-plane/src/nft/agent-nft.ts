@@ -88,6 +88,44 @@ export async function verifyAgentOwnership(
 }
 
 /**
+ * Verify that a signature was created by the claimed wallet address.
+ * Message format: "terminus-auth:{nodeId}"
+ */
+export function verifyWalletSignature(
+    nodeId: string,
+    claimedWallet: string,
+    signature: string
+): { valid: boolean; recoveredAddress?: string; error?: string } {
+    const message = `terminus-auth:${nodeId}`;
+
+    try {
+        const recoveredAddress = ethers.verifyMessage(message, signature);
+
+        if (recoveredAddress.toLowerCase() === claimedWallet.toLowerCase()) {
+            logger.info('SigVerify', `✅ Signature valid for ${claimedWallet.slice(0, 10)}...`);
+            return { valid: true, recoveredAddress };
+        } else {
+            logger.warn('SigVerify', `❌ Signature mismatch: claimed ${claimedWallet.slice(0, 10)}... recovered ${recoveredAddress.slice(0, 10)}...`);
+            return {
+                valid: false,
+                recoveredAddress,
+                error: `Signature does not match claimed wallet`
+            };
+        }
+    } catch (error) {
+        logger.error('SigVerify', `Invalid signature: ${(error as Error).message}`);
+        return { valid: false, error: 'Invalid signature format' };
+    }
+}
+
+/**
+ * Generate the message that should be signed by the wallet
+ */
+export function getAuthMessage(nodeId: string): string {
+    return `terminus-auth:${nodeId}`;
+}
+
+/**
  * Check if a wallet owns ANY agent NFT
  */
 export async function walletOwnsAnyAgent(wallet: string): Promise<{ valid: boolean; count: number }> {

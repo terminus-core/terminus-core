@@ -31,7 +31,7 @@ import { logger } from './logger.js';
 import { handleJobResult } from './dispatcher.js';
 import { startHttpServer, stopHttpServer } from './http.js';
 import { recordNodeConnection, recordNodeDisconnection } from './monitor.js';
-import { verifyAgentOwnership } from './nft/agent-nft.js';
+import { verifyAgentOwnership, verifyWalletSignature } from './nft/agent-nft.js';
 
 // NFT requirement flag
 const REQUIRE_NFT = process.env.REQUIRE_AGENT_NFT === 'true';
@@ -144,6 +144,26 @@ async function handleAuth(socket: WebSocket, message: AuthMessage): Promise<void
         sendAuthAck(socket, message.traceId, false, 'Invalid credentials');
         socket.close();
         return;
+    }
+
+    // Wallet signature verification (if wallet is provided)
+    const { walletSignature } = message.payload;
+    if (REQUIRE_NFT && wallet) {
+        if (!walletSignature) {
+            logger.warn('Auth', `❌ ${nodeId} rejected: no wallet signature provided`);
+            sendAuthAck(socket, message.traceId, false, 'Wallet signature required');
+            socket.close();
+            return;
+        }
+
+        const sigVerification = verifyWalletSignature(nodeId, wallet, walletSignature);
+        if (!sigVerification.valid) {
+            logger.warn('Auth', `❌ ${nodeId} rejected: invalid wallet signature`);
+            sendAuthAck(socket, message.traceId, false, `Signature verification failed: ${sigVerification.error}`);
+            socket.close();
+            return;
+        }
+        logger.info('Auth', `🔐 Wallet ownership verified via signature`);
     }
 
     // NFT verification (if enabled)
