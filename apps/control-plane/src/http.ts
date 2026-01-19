@@ -15,6 +15,7 @@ import {
     getUserBalance, hasEnoughBalance, deductBalance, verifyAndCreditDeposit, getBalanceStats, getAllUserBalances
 } from './payment/index.js';
 import { getAgentNodesStatus, getLogs, getConnectionHistory, getMonitoringSummary } from './monitor.js';
+import { getAllAgentReputations } from './nft/agent-nft.js';
 
 const HTTP_PORT = parseInt(process.env.HTTP_PORT ?? '3000', 10);
 
@@ -403,6 +404,10 @@ const server = createServer(async (req, res) => {
             // Connection history
             const history = getConnectionHistory(50);
             sendJson(res, 200, { history });
+        } else if (url === '/api/reputation' || url === '/api/reputation/') {
+            // On-chain agent reputations
+            const reputations = await getAllAgentReputations();
+            sendJson(res, 200, { reputations });
         } else if (url === '/' || url === '/health') {
             sendJson(res, 200, { status: 'ok', service: 'terminus-control-plane' });
         } else {

@@ -31,6 +31,14 @@ const TERMINUS_AGENTS_ABI = [
     'function totalAgents() view returns (uint256)',
 ];
 
+// TerminusReputation contract
+const TERMINUS_REPUTATION_CONTRACT = process.env.TERMINUS_REPUTATION_CONTRACT || '0xe8c54107aa900ed1b7750be404c0499c056a7192';
+
+const TERMINUS_REPUTATION_ABI = [
+    'function getReputation(uint256 agentId) view returns (uint256 score, uint256 count)',
+    'function getFeedbackCount(uint256 agentId) view returns (uint256)',
+];
+
 // =============================================================================
 // Provider
 // =============================================================================
@@ -54,6 +62,68 @@ function getTerminusAgents(): ethers.Contract {
         );
     }
     return terminusAgents;
+}
+
+let terminusReputation: ethers.Contract | null = null;
+
+function getTerminusReputation(): ethers.Contract {
+    if (!terminusReputation) {
+        terminusReputation = new ethers.Contract(
+            TERMINUS_REPUTATION_CONTRACT,
+            TERMINUS_REPUTATION_ABI,
+            getProvider()
+        );
+    }
+    return terminusReputation;
+}
+
+// =============================================================================
+// Reputation Functions
+// =============================================================================
+
+/**
+ * Get agent reputation from on-chain TerminusReputation contract
+ */
+export async function getAgentReputation(agentType: string): Promise<{
+    score: number;     // 0-5 (e.g., 4.5)
+    count: number;     // Total reviews
+    agentId: number;
+} | null> {
+    const agentId = AGENT_NFT_IDS[agentType];
+    if (agentId === undefined) return null;
+
+    try {
+        const reputation = getTerminusReputation();
+        const [rawScore, count] = await reputation.getReputation(agentId);
+
+        // rawScore is 0-500 (representing 0.00-5.00), convert to decimal
+        const score = Number(rawScore) / 100;
+
+        return {
+            score,
+            count: Number(count),
+            agentId,
+        };
+    } catch (error) {
+        logger.warn('Reputation', `Failed to fetch reputation for ${agentType}: ${(error as Error).message}`);
+        return { score: 0, count: 0, agentId };
+    }
+}
+
+/**
+ * Get all agent reputations
+ */
+export async function getAllAgentReputations(): Promise<Record<string, { score: number; count: number }>> {
+    const reputations: Record<string, { score: number; count: number }> = {};
+
+    for (const agentType of Object.keys(AGENT_NFT_IDS)) {
+        const rep = await getAgentReputation(agentType);
+        if (rep) {
+            reputations[agentType] = { score: rep.score, count: rep.count };
+        }
+    }
+
+    return reputations;
 }
 
 // =============================================================================
