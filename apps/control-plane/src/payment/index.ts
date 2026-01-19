@@ -22,3 +22,15 @@ export {
     type PaymentTransaction
 } from './distributor.js';
 export { checkPayment, settlePayment, createPaymentRequirement, type PaymentRequirement, type PaymentPayload, type PaymentMiddlewareResult } from './middleware.js';
+export {
+    getUserBalance,
+    getOrCreateUserBalance,
+    hasEnoughBalance,
+    deductBalance,
+    creditBalance,
+    verifyAndCreditDeposit,
+    getAllUserBalances,
+    getBalanceStats,
+    type UserBalance,
+    type DepositRecord
+} from './user-balance.js';
