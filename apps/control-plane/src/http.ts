@@ -200,10 +200,14 @@ async function handleChat(req: IncomingMessage, res: ServerResponse): Promise<vo
             }
         }
 
+        // Generate queryHash for feedback tracking
+        const queryHash = Buffer.from(`${Date.now()}-${body.message.slice(0, 20)}`).toString('base64').slice(0, 16);
+
         sendJson(res, 200, {
             success: result.success,
             message: result.finalResponse,
             agentsUsed: result.agentsUsed,
+            queryHash,
             agentResults: result.agentResults.map(r => ({
                 agent: r.agentName,
                 tools: r.toolCalls.map(t => t.tool),
@@ -254,6 +258,45 @@ async function handleDeposit(req: IncomingMessage, res: ServerResponse): Promise
                 error: result.error,
             });
         }
+    } catch (error) {
+        sendError(res, 500, (error as Error).message);
+    }
+}
+
+// =============================================================================
+// Feedback Submission
+// =============================================================================
+
+async function handleFeedback(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    if (req.method !== 'POST') {
+        sendError(res, 405, 'Method not allowed');
+        return;
+    }
+
+    const userWallet = req.headers['x-wallet-address'] as string;
+    if (!userWallet) {
+        sendError(res, 400, 'Missing X-Wallet-Address header');
+        return;
+    }
+
+    try {
+        const body = await parseBody(req) as { queryHash?: string; agentTypes?: string[]; score?: number };
+
+        if (!body.queryHash || !body.score) {
+            sendError(res, 400, 'Missing queryHash or score');
+            return;
+        }
+
+        // Log feedback (on-chain submission would go here)
+        logger.info('Feedback', `📝 ${userWallet.slice(0, 10)}... rated ${body.agentTypes?.join(', ') || 'unknown'}: ${body.score}/5`);
+
+        // For now, just store in memory (could be submitted to TerminusReputation contract)
+        sendJson(res, 200, {
+            success: true,
+            message: 'Feedback recorded',
+            queryHash: body.queryHash,
+            score: body.score,
+        });
     } catch (error) {
         sendError(res, 500, (error as Error).message);
     }
@@ -319,6 +362,8 @@ const server = createServer(async (req, res) => {
             await handleStatus(res);
         } else if (url === '/api/deposit' || url === '/api/deposit/') {
             await handleDeposit(req, res);
+        } else if (url === '/api/feedback' || url === '/api/feedback/') {
+            await handleFeedback(req, res);
         } else if (url.startsWith('/api/balance')) {
             await handleBalance(req, res);
         } else if (url === '/api/payments' || url === '/api/payments/') {
