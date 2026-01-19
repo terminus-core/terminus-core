@@ -8,7 +8,9 @@ import { handleAgentRoutes } from './agent-routes.js';
 import { nodeRegistry } from './registry.js';
 import { logger } from './logger.js';
 import { getAllAgents, getAgentState } from './agent-store.js';
-import { createPlan, summarizeResults } from './orchestrator.js';
+import { executeMultiAgent } from './orchestrator.js';
+import { AGENTS } from './agents-registry.js';
+import { checkPayment, settlePayment, distributePayment, getPaymentConfig, getPaymentStats, getWalletStats } from './payment/index.js';
 
 const HTTP_PORT = parseInt(process.env.HTTP_PORT ?? '3000', 10);
 
@@ -116,7 +118,7 @@ async function handleStatus(res: ServerResponse): Promise<void> {
 }
 
 // =============================================================================
-// Chat with LLM (Grok)
+// Chat with LLM (Multi-Agent)
 // =============================================================================
 
 async function handleChat(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -126,7 +128,13 @@ async function handleChat(req: IncomingMessage, res: ServerResponse): Promise<vo
     }
 
     try {
-        const body = await parseBody(req) as { message?: string; timeout?: number };
+        // Check payment (returns 402 if payment required and not provided)
+        const paymentCheck = await checkPayment(req, res, '/api/chat', 'Multi-agent chat query');
+        if (!paymentCheck.paymentVerified) {
+            return; // Response already sent by checkPayment
+        }
+
+        const body = await parseBody(req) as { message?: string };
 
         if (!body.message) {
             sendError(res, 400, 'Missing "message" field');
@@ -135,44 +143,41 @@ async function handleChat(req: IncomingMessage, res: ServerResponse): Promise<vo
 
         logger.info('HTTP', `💬 Chat: "${body.message.slice(0, 50)}..."`);
 
-        // Step 1: Create plan using Grok
-        const plan = await createPlan(body.message);
-        logger.info('HTTP', `📋 Plan: ${plan.steps.length} steps`);
+        // Execute multi-agent flow
+        const result = await executeMultiAgent(body.message);
 
-        // Step 2: Execute each step on nodes
-        const results: Record<string, unknown> = {};
+        logger.info('HTTP', `✅ Chat complete (${result.agentsUsed.length} agents)`);
 
-        for (const step of plan.steps) {
-            logger.info('HTTP', `⚡ Executing: ${step.tool}(${JSON.stringify(step.params).slice(0, 30)}...)`);
+        // Distribute payment to agents if payment was made
+        const config = getPaymentConfig();
+        let paymentInfo = null;
+        if (config.enabled && paymentCheck.paymentPayload && paymentCheck.requirement) {
+            // Settle the payment on-chain
+            const settlement = await settlePayment(paymentCheck.paymentPayload, paymentCheck.requirement);
 
-            const jobResult = await dispatchJob({
-                input: step.params,
-                timeout: body.timeout ?? 15000,
-            });
-
-            // Add toolCall info so node knows to use tools.ts
-            if (jobResult.result) {
-                results[step.id] = {
-                    tool: step.tool,
-                    success: jobResult.success,
-                    output: jobResult.result.output,
-                };
-            }
+            // Distribute to orchestrator and agents
+            const distribution = distributePayment(config.queryPriceUSDC, result.agentsUsed);
+            paymentInfo = {
+                settled: settlement.success,
+                txHash: settlement.txHash,
+                distribution: {
+                    total: distribution.totalAmount,
+                    orchestrator: distribution.orchestratorAmount,
+                    agents: distribution.agentPayments,
+                },
+            };
         }
 
-        // Step 3: Summarize results using Grok
-        const summary = await summarizeResults(plan, results);
-
-        logger.info('HTTP', `✅ Chat complete`);
-
         sendJson(res, 200, {
-            success: true,
-            message: summary,
-            plan: {
-                reasoning: plan.systemContext,
-                steps: plan.steps.map(s => ({ tool: s.tool, params: s.params })),
-            },
-            results,
+            success: result.success,
+            message: result.finalResponse,
+            agentsUsed: result.agentsUsed,
+            agentResults: result.agentResults.map(r => ({
+                agent: r.agentName,
+                tools: r.toolCalls.map(t => t.tool),
+                summary: r.summary.slice(0, 200) + (r.summary.length > 200 ? '...' : ''),
+            })),
+            payment: paymentInfo,
         });
     } catch (error) {
         logger.error('HTTP', `Chat error: ${(error as Error).message}`);
@@ -212,6 +217,18 @@ const server = createServer(async (req, res) => {
             await handleChat(req, res);
         } else if (url === '/api/status' || url === '/api/status/') {
             await handleStatus(res);
+        } else if (url === '/api/payments' || url === '/api/payments/') {
+            // Payment stats endpoint
+            const paymentStats = getPaymentStats();
+            const walletStats = getWalletStats();
+            const config = getPaymentConfig();
+            sendJson(res, 200, {
+                enabled: config.enabled,
+                network: config.network,
+                queryPrice: config.queryPriceUSDC,
+                stats: paymentStats,
+                wallets: walletStats,
+            });
         } else if (url === '/' || url === '/health') {
             sendJson(res, 200, { status: 'ok', service: 'terminus-control-plane' });
         } else {

@@ -14,8 +14,12 @@
         "@anthropic-ai/sdk": "^0.71.2",
         "@terminus/config": "workspace:*",
         "@terminus/protocol": "workspace:*",
+        "@x402/core": "^2.2.0",
+        "@x402/evm": "^2.2.0",
+        "@x402/express": "^2.2.0",
         "ai": "^6.0.39",
         "dotenv": "^17.2.3",
+        "ethers": "^6.16.0",
         "openai": "^6.16.0",
         "ws": "^8.18.0",
         "zod": "^4.3.5"
