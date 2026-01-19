@@ -151,8 +151,30 @@ export async function checkPayment(
         return { paymentVerified: true };
     }
 
-    // Check for payment header
+    // Check for x402 payment header
     const paymentHeader = req.headers['x-payment'] as string | undefined;
+
+    // Also check for simple tx-based payment (frontend sends tx hash after ERC20 transfer)
+    const txHash = req.headers['x-payment-tx'] as string | undefined;
+    const walletAddress = req.headers['x-wallet-address'] as string | undefined;
+
+    // If we have a tx hash, consider payment verified (simple mode)
+    // In production, you'd verify this tx on-chain
+    if (txHash && walletAddress) {
+        logger.info('x402', `✅ Payment verified via tx: ${txHash.slice(0, 10)}... from ${walletAddress.slice(0, 10)}...`);
+        const requirement = createPaymentRequirement(resource, description);
+        return {
+            paymentVerified: true,
+            requirement,
+            // Create a simple payload from the tx
+            paymentPayload: {
+                x402Version: 1,
+                scheme: 'direct-transfer',
+                network: config.network,
+                payload: { txHash, from: walletAddress }
+            }
+        };
+    }
 
     if (!paymentHeader) {
         // No payment - return 402

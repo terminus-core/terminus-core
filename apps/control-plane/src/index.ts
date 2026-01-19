@@ -5,7 +5,11 @@
 // Handles node registration, heartbeats, job routing, and HTTP API.
 // =============================================================================
 
-import 'dotenv/config';
+import { config as dotenvConfig } from 'dotenv';
+import { join } from 'path';
+
+// Load .env from terminus-core root (../../.env relative to apps/control-plane)
+dotenvConfig({ path: join(process.cwd(), '../../.env') });
 
 import { WebSocketServer, WebSocket } from 'ws';
 import { config } from '@terminus/config';
