@@ -12,6 +12,16 @@ import { join } from 'path';
 import { logger } from './logger.js';
 import { AGENTS, formatAgentsForLLM, getAgentById, type AgentDefinition } from './agents-registry.js';
 import { executeAgentTool } from './agent-tools.js';
+import { dispatchAgentJob } from './index.js';
+import { nodeRegistry } from './registry.js';
+
+// =============================================================================
+// Configuration
+// =============================================================================
+
+function isLocalAgentsMode(): boolean {
+    return process.env.LOCAL_AGENTS !== 'false';
+}
 
 // =============================================================================
 // API Key Loading
@@ -253,6 +263,28 @@ export async function executeMultiAgent(userMessage: string): Promise<MultiAgent
     const agentPromises = intent.selectedAgents.map(async (agentId) => {
         const agent = getAgentById(agentId);
         if (!agent) return null;
+
+        // Check if we should use remote agents
+        if (!isLocalAgentsMode()) {
+            // Try to dispatch to remote node
+            const remoteNode = nodeRegistry.getIdleNodeForAgent(agentId);
+            if (remoteNode) {
+                logger.info('Orchestrator', `📡 Dispatching ${agentId} to remote node ${remoteNode.nodeId}`);
+                try {
+                    const result = await dispatchAgentJob(agentId, userMessage);
+                    return {
+                        agentId,
+                        agentName: agent.name,
+                        toolCalls: result.toolsUsed || [],
+                        summary: result.response,
+                    } as AgentExecutionResult;
+                } catch (err) {
+                    logger.warn('Orchestrator', `⚠️ Remote dispatch failed for ${agentId}, falling back to local`);
+                }
+            }
+        }
+
+        // Execute locally
         return executeAgent(agent, userMessage);
     });
 

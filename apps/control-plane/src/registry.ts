@@ -11,10 +11,16 @@ class NodeRegistry {
     /**
      * Register a new node.
      */
-    register(nodeId: string, socket: WebSocket, data: Omit<RegisteredNode, 'nodeId' | 'status' | 'connectedAt' | 'lastHeartbeat' | 'metrics'>): void {
+    register(
+        nodeId: string,
+        socket: WebSocket,
+        data: Omit<RegisteredNode, 'nodeId' | 'status' | 'connectedAt' | 'lastHeartbeat' | 'metrics'>
+    ): void {
         const node: RegisteredNode = {
             nodeId,
             capabilities: data.capabilities,
+            agentTypes: data.agentTypes,
+            wallet: data.wallet,
             version: data.version,
             status: 'ONLINE',
             connectedAt: Date.now(),
@@ -95,6 +101,23 @@ class NodeRegistry {
         return Array.from(this.nodes.values()).filter(
             n => n.status === 'ONLINE' && n.metrics.activeJobs === 0
         );
+    }
+
+    /**
+     * Get nodes that can run a specific agent type.
+     */
+    getNodesForAgent(agentType: string): RegisteredNode[] {
+        return this.getOnlineNodes().filter(
+            n => n.agentTypes?.includes(agentType)
+        );
+    }
+
+    /**
+     * Get an idle node for a specific agent type.
+     */
+    getIdleNodeForAgent(agentType: string): RegisteredNode | undefined {
+        const nodes = this.getNodesForAgent(agentType);
+        return nodes.find(n => n.metrics.activeJobs === 0);
     }
 
     /**

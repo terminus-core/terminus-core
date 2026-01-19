@@ -21,6 +21,7 @@ import {
     type HeartbeatAckMessage,
     type ErrorMessage,
     type JobResultMessage,
+    type AgentJobResultMessage,
     parseMessage,
     serializeMessage,
     createBaseMessage,
@@ -29,6 +30,7 @@ import { nodeRegistry } from './registry.js';
 import { logger } from './logger.js';
 import { handleJobResult } from './dispatcher.js';
 import { startHttpServer, stopHttpServer } from './http.js';
+import { recordNodeConnection, recordNodeDisconnection } from './monitor.js';
 
 // -----------------------------------------------------------------------------
 // WebSocket Server Setup
@@ -83,6 +85,7 @@ wss.on('connection', (socket: WebSocket) => {
         // Find and remove node from registry
         const nodeId = nodeRegistry.findNodeIdBySocket(socket);
         if (nodeId) {
+            recordNodeDisconnection(nodeId);
             nodeRegistry.unregister(nodeId);
             logger.connection(nodeId, 'disconnected');
         }
@@ -109,6 +112,9 @@ function handleMessage(socket: WebSocket, message: TerminusMessage): void {
         case 'JOB_RESULT':
             handleJobResult(message as JobResultMessage);
             break;
+        case 'AGENT_JOB_RESULT':
+            handleAgentJobResult(message as AgentJobResultMessage);
+            break;
         default:
             logger.warn('Protocol', `Unexpected message type: ${message.type}`);
     }
@@ -119,7 +125,7 @@ function handleMessage(socket: WebSocket, message: TerminusMessage): void {
 // -----------------------------------------------------------------------------
 
 function handleAuth(socket: WebSocket, message: AuthMessage): void {
-    const { nodeId, capabilities, secret, version } = message.payload;
+    const { nodeId, capabilities, agentTypes, wallet, secret, version } = message.payload;
 
     // Clear auth timeout
     const timeout = authTimeouts.get(socket);
@@ -137,9 +143,16 @@ function handleAuth(socket: WebSocket, message: AuthMessage): void {
     }
 
     // Register node
-    nodeRegistry.register(nodeId, socket, { capabilities, version });
+    nodeRegistry.register(nodeId, socket, { capabilities, agentTypes, wallet, version });
+    recordNodeConnection(nodeId, agentTypes || []);
     logger.connection(nodeId, 'authorized');
     logger.info('Capabilities', `📦 Node ${nodeId} capabilities: [${capabilities.join(', ')}]`);
+    if (agentTypes?.length) {
+        logger.info('Agents', `🤖 Node ${nodeId} agents: [${agentTypes.join(', ')}]`);
+    }
+    if (wallet) {
+        logger.info('Wallet', `💳 Node ${nodeId} wallet: ${wallet.slice(0, 10)}...`);
+    }
 
     // Send success acknowledgment
     sendAuthAck(socket, message.traceId, true, undefined, config.timing.heartbeatInterval);
@@ -207,6 +220,96 @@ function sendError(socket: WebSocket, code: string, message: string, fatal: bool
 // -----------------------------------------------------------------------------
 
 startHttpServer();
+
+// -----------------------------------------------------------------------------
+// Pending Agent Jobs (for distributed execution)
+// -----------------------------------------------------------------------------
+
+interface PendingAgentJob {
+    jobId: string;
+    agentType: string;
+    resolve: (result: { success: boolean; response: string; toolsUsed?: unknown[] }) => void;
+    reject: (error: Error) => void;
+    timeout: NodeJS.Timeout;
+}
+
+const pendingAgentJobs = new Map<string, PendingAgentJob>();
+
+export function dispatchAgentJob(
+    agentType: string,
+    userQuery: string,
+    timeoutMs: number = 60000
+): Promise<{ success: boolean; response: string; toolsUsed?: unknown[] }> {
+    return new Promise((resolve, reject) => {
+        // Find a node that can run this agent type
+        const node = nodeRegistry.getIdleNodeForAgent(agentType);
+
+        if (!node) {
+            // No remote node available
+            reject(new Error(`No node available for agent: ${agentType}`));
+            return;
+        }
+
+        const socket = nodeRegistry.getSocket(node.nodeId);
+        if (!socket) {
+            reject(new Error(`No socket for node: ${node.nodeId}`));
+            return;
+        }
+
+        const jobId = `agent-job-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+        // Set timeout
+        const timeout = setTimeout(() => {
+            pendingAgentJobs.delete(jobId);
+            reject(new Error(`Agent job timed out: ${jobId}`));
+        }, timeoutMs);
+
+        // Store pending job
+        pendingAgentJobs.set(jobId, {
+            jobId,
+            agentType,
+            resolve,
+            reject,
+            timeout,
+        });
+
+        // Send job to node
+        const message = {
+            type: 'AGENT_JOB',
+            traceId: `trace-${Date.now()}`,
+            timestamp: Date.now(),
+            payload: {
+                jobId,
+                agentType,
+                userQuery,
+            },
+        };
+
+        socket.send(JSON.stringify(message));
+        logger.info('AgentDispatch', `📤 Job ${jobId} sent to ${node.nodeId} for ${agentType}`);
+    });
+}
+
+function handleAgentJobResult(message: AgentJobResultMessage): void {
+    const { jobId, success, response, error } = message.payload;
+
+    const pending = pendingAgentJobs.get(jobId);
+    if (!pending) {
+        logger.warn('AgentDispatch', `❓ Unknown job result: ${jobId}`);
+        return;
+    }
+
+    clearTimeout(pending.timeout);
+    pendingAgentJobs.delete(jobId);
+
+    if (success) {
+        logger.info('AgentDispatch', `✅ Job ${jobId} completed`);
+        pending.resolve({ success: true, response, toolsUsed: message.payload.toolsUsed });
+    } else {
+        logger.error('AgentDispatch', `❌ Job ${jobId} failed: ${error?.message}`);
+        pending.reject(new Error(error?.message || 'Agent job failed'));
+    }
+}
 
 // -----------------------------------------------------------------------------
 // Graceful Shutdown

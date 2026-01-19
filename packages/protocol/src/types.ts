@@ -8,6 +8,8 @@
 export interface RegisteredNode {
     nodeId: string;
     capabilities: string[];
+    agentTypes?: string[];           // Agents this node can execute (e.g., ['travel-planner'])
+    wallet?: string;                 // Wallet address for payments
     version: string;
     status: 'ONLINE' | 'OFFLINE';
     connectedAt: number;

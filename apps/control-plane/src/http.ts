@@ -11,6 +11,7 @@ import { getAllAgents, getAgentState } from './agent-store.js';
 import { executeMultiAgent } from './orchestrator.js';
 import { AGENTS } from './agents-registry.js';
 import { checkPayment, settlePayment, distributePayment, getPaymentConfig, getPaymentStats, getWalletStats, getAllTransactions } from './payment/index.js';
+import { getAgentNodesStatus, getLogs, getConnectionHistory, getMonitoringSummary } from './monitor.js';
 
 const HTTP_PORT = parseInt(process.env.HTTP_PORT ?? '3000', 10);
 
@@ -237,6 +238,27 @@ const server = createServer(async (req, res) => {
             // Recent transactions
             const transactions = getAllTransactions(50);
             sendJson(res, 200, { transactions });
+        } else if (url === '/api/monitor' || url === '/api/monitor/') {
+            // Monitoring summary
+            const summary = getMonitoringSummary();
+            sendJson(res, 200, summary);
+        } else if (url === '/api/monitor/nodes' || url === '/api/monitor/nodes/') {
+            // Agent nodes status
+            const nodes = getAgentNodesStatus();
+            sendJson(res, 200, { nodes });
+        } else if (url === '/api/monitor/logs' || url === '/api/monitor/logs/') {
+            // Recent logs
+            const urlObj = new URL(req.url || '', `http://${req.headers.host}`);
+            const level = urlObj.searchParams.get('level') as 'DEBUG' | 'INFO' | 'WARN' | 'ERROR' | undefined;
+            const source = urlObj.searchParams.get('source') || undefined;
+            const nodeId = urlObj.searchParams.get('nodeId') || undefined;
+            const limit = parseInt(urlObj.searchParams.get('limit') || '100', 10);
+            const logs = getLogs({ level, source, nodeId, limit });
+            sendJson(res, 200, { logs });
+        } else if (url === '/api/monitor/history' || url === '/api/monitor/history/') {
+            // Connection history
+            const history = getConnectionHistory(50);
+            sendJson(res, 200, { history });
         } else if (url === '/' || url === '/health') {
             sendJson(res, 200, { status: 'ok', service: 'terminus-control-plane' });
         } else {

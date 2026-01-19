@@ -12,6 +12,8 @@ export type MessageType =
     | 'HEARTBEAT_ACK'
     | 'JOB_ASSIGN'
     | 'JOB_RESULT'
+    | 'AGENT_JOB'
+    | 'AGENT_JOB_RESULT'
     | 'ERROR';
 
 // -----------------------------------------------------------------------------
@@ -37,6 +39,8 @@ export interface AuthMessage extends BaseMessage {
     payload: {
         nodeId: string;              // Unique node identifier (UUID for now, wallet address later)
         capabilities: string[];       // ['python-3.10', 'docker', 'nvidia-gpu']
+        agentTypes?: string[];        // ['travel-planner', 'budget-planner'] - agents this node can run
+        wallet?: string;              // Wallet address for payments (optional)
         specs: {                      // Machine specifications
             os: string;
             arch: string;
@@ -133,6 +137,52 @@ export interface JobResultMessage extends BaseMessage {
 }
 
 // -----------------------------------------------------------------------------
+// Agent Job Messages (for distributed agent execution)
+// -----------------------------------------------------------------------------
+
+/**
+ * Backend → Node: Execute agent logic for a user query.
+ */
+export interface AgentJobMessage extends BaseMessage {
+    type: 'AGENT_JOB';
+    payload: {
+        jobId: string;
+        agentType: string;           // 'travel-planner', 'budget-planner', etc.
+        userQuery: string;           // The user's original question
+        context?: {                  // Optional context
+            conversationId?: string;
+            previousMessages?: Array<{ role: string; content: string }>;
+            userData?: Record<string, unknown>;
+        };
+    };
+}
+
+/**
+ * Node → Backend: Agent execution result.
+ */
+export interface AgentJobResultMessage extends BaseMessage {
+    type: 'AGENT_JOB_RESULT';
+    payload: {
+        jobId: string;
+        success: boolean;
+        response: string;            // Agent's response to the user
+        toolsUsed?: Array<{          // Tools that were invoked
+            name: string;
+            params: unknown;
+            result: unknown;
+        }>;
+        metrics?: {
+            llmTokensUsed?: number;
+            executionTimeMs: number;
+        };
+        error?: {
+            code: string;
+            message: string;
+        };
+    };
+}
+
+// -----------------------------------------------------------------------------
 // Error Messages
 // -----------------------------------------------------------------------------
 
@@ -159,4 +209,6 @@ export type TerminusMessage =
     | HeartbeatAckMessage
     | JobAssignMessage
     | JobResultMessage
+    | AgentJobMessage
+    | AgentJobResultMessage
     | ErrorMessage;
