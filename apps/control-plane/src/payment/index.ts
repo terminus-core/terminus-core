@@ -12,5 +12,13 @@ export {
     initializeAllAgentWallets,
     type AgentWallet
 } from './wallet-generator.js';
-export { distributePayment, getPaymentLedger, getOrchestratorEarnings, getPaymentStats, type PaymentDistribution } from './distributor.js';
+export {
+    distributePayment,
+    getPaymentLedger,
+    getOrchestratorEarnings,
+    getPaymentStats,
+    getAllTransactions,
+    type PaymentDistribution,
+    type PaymentTransaction
+} from './distributor.js';
 export { checkPayment, settlePayment, createPaymentRequirement, type PaymentRequirement, type PaymentPayload, type PaymentMiddlewareResult } from './middleware.js';

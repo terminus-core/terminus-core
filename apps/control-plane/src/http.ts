@@ -10,7 +10,7 @@ import { logger } from './logger.js';
 import { getAllAgents, getAgentState } from './agent-store.js';
 import { executeMultiAgent } from './orchestrator.js';
 import { AGENTS } from './agents-registry.js';
-import { checkPayment, settlePayment, distributePayment, getPaymentConfig, getPaymentStats, getWalletStats } from './payment/index.js';
+import { checkPayment, settlePayment, distributePayment, getPaymentConfig, getPaymentStats, getWalletStats, getAllTransactions } from './payment/index.js';
 
 const HTTP_PORT = parseInt(process.env.HTTP_PORT ?? '3000', 10);
 
@@ -155,8 +155,12 @@ async function handleChat(req: IncomingMessage, res: ServerResponse): Promise<vo
             // Settle the payment on-chain
             const settlement = await settlePayment(paymentCheck.paymentPayload, paymentCheck.requirement);
 
+            // Get user wallet from headers
+            const userWallet = req.headers['x-wallet-address'] as string || 'unknown';
+            const userTxHash = req.headers['x-payment-tx'] as string || undefined;
+
             // Distribute to orchestrator and agents
-            const distribution = distributePayment(config.queryPriceUSDC, result.agentsUsed);
+            const distribution = await distributePayment(config.queryPriceUSDC, result.agentsUsed, userWallet, userTxHash);
             paymentInfo = {
                 settled: settlement.success,
                 txHash: settlement.txHash,
@@ -229,6 +233,10 @@ const server = createServer(async (req, res) => {
                 stats: paymentStats,
                 wallets: walletStats,
             });
+        } else if (url === '/api/transactions' || url === '/api/transactions/') {
+            // Recent transactions
+            const transactions = getAllTransactions(50);
+            sendJson(res, 200, { transactions });
         } else if (url === '/' || url === '/health') {
             sendJson(res, 200, { status: 'ok', service: 'terminus-control-plane' });
         } else {
