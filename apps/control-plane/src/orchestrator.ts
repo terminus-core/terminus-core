@@ -279,12 +279,17 @@ export async function executeMultiAgent(userMessage: string): Promise<MultiAgent
                         summary: result.response,
                     } as AgentExecutionResult;
                 } catch (err) {
-                    logger.warn('Orchestrator', `⚠️ Remote dispatch failed for ${agentId}, falling back to local`);
+                    logger.error('Orchestrator', `❌ Remote dispatch failed for ${agentId}: ${(err as Error).message}`);
+                    return null;
                 }
+            } else {
+                // No remote node available for this agent - skip it
+                logger.warn('Orchestrator', `⚠️ No remote node available for ${agentId}, skipping`);
+                return null;
             }
         }
 
-        // Execute locally
+        // LOCAL_AGENTS=true: Execute locally
         return executeAgent(agent, userMessage);
     });
 
