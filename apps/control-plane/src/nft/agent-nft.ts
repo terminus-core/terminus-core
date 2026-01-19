@@ -12,20 +12,23 @@ import { logger } from '../logger.js';
 // =============================================================================
 
 const BASE_SEPOLIA_RPC = process.env.BASE_SEPOLIA_RPC || 'https://sepolia.base.org';
-const IDENTITY_REGISTRY = '0x8004A818BFB912233c491871b3d84c89A494BD9e';
+
+// TerminusAgents contract (our custom ERC-721)
+const TERMINUS_AGENTS_CONTRACT = process.env.TERMINUS_AGENTS_CONTRACT || '0x170b4196e6228d3abd2d497bacade8f6fc1a9f53';
 
 // Agent ID to Agent Type mapping (on-chain minted NFTs)
 const AGENT_NFT_IDS: Record<string, number> = {
-    'travel-planner': 29,
-    'health-advisor': 30,
+    'travel-planner': 0,
+    'health-advisor': 1,
 };
 
-// ERC-721 minimal ABI
-const IDENTITY_REGISTRY_ABI = [
+// ERC-721 minimal ABI for TerminusAgents
+const TERMINUS_AGENTS_ABI = [
     'function ownerOf(uint256 tokenId) view returns (address)',
     'function tokenURI(uint256 tokenId) view returns (string)',
-    'function getAgentWallet(uint256 agentId) view returns (address)',
+    'function getAgentType(uint256 agentId) view returns (string)',
     'function balanceOf(address owner) view returns (uint256)',
+    'function totalAgents() view returns (uint256)',
 ];
 
 // =============================================================================
@@ -33,7 +36,7 @@ const IDENTITY_REGISTRY_ABI = [
 // =============================================================================
 
 let provider: ethers.JsonRpcProvider | null = null;
-let identityRegistry: ethers.Contract | null = null;
+let terminusAgents: ethers.Contract | null = null;
 
 function getProvider(): ethers.JsonRpcProvider {
     if (!provider) {
@@ -42,15 +45,15 @@ function getProvider(): ethers.JsonRpcProvider {
     return provider;
 }
 
-function getIdentityRegistry(): ethers.Contract {
-    if (!identityRegistry) {
-        identityRegistry = new ethers.Contract(
-            IDENTITY_REGISTRY,
-            IDENTITY_REGISTRY_ABI,
+function getTerminusAgents(): ethers.Contract {
+    if (!terminusAgents) {
+        terminusAgents = new ethers.Contract(
+            TERMINUS_AGENTS_CONTRACT,
+            TERMINUS_AGENTS_ABI,
             getProvider()
         );
     }
-    return identityRegistry;
+    return terminusAgents;
 }
 
 // =============================================================================
@@ -71,7 +74,7 @@ export async function verifyAgentOwnership(
     }
 
     try {
-        const registry = getIdentityRegistry();
+        const registry = getTerminusAgents();
         const owner = await registry.ownerOf(agentId);
 
         if (owner.toLowerCase() === wallet.toLowerCase()) {
@@ -130,7 +133,7 @@ export function getAuthMessage(nodeId: string): string {
  */
 export async function walletOwnsAnyAgent(wallet: string): Promise<{ valid: boolean; count: number }> {
     try {
-        const registry = getIdentityRegistry();
+        const registry = getTerminusAgents();
         const balance = await registry.balanceOf(wallet);
         const count = Number(balance);
 
@@ -150,7 +153,7 @@ export async function getOwnedAgentIds(wallet: string): Promise<number[]> {
 
     for (const [agentType, agentId] of Object.entries(AGENT_NFT_IDS)) {
         try {
-            const registry = getIdentityRegistry();
+            const registry = getTerminusAgents();
             const owner = await registry.ownerOf(agentId);
 
             if (owner.toLowerCase() === wallet.toLowerCase()) {
@@ -186,7 +189,7 @@ export function getAgentIdFromType(agentType: string): number | null {
 // =============================================================================
 
 export const NFT_CONFIG = {
-    identityRegistry: IDENTITY_REGISTRY,
+    terminusAgentsContract: TERMINUS_AGENTS_CONTRACT,
     rpcUrl: BASE_SEPOLIA_RPC,
     agentNftIds: AGENT_NFT_IDS,
 };
