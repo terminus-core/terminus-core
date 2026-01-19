@@ -318,6 +318,11 @@ async function aggregateResults(
 ): Promise<string> {
     logger.info('Orchestrator', `📝 Aggregating ${agentResults.length} agent results`);
 
+    // No results - return empty (no agents responded)
+    if (agentResults.length === 0) {
+        return '';
+    }
+
     if (agentResults.length === 1) {
         return agentResults[0].summary;
     }
