@@ -31,6 +31,10 @@ import { logger } from './logger.js';
 import { handleJobResult } from './dispatcher.js';
 import { startHttpServer, stopHttpServer } from './http.js';
 import { recordNodeConnection, recordNodeDisconnection } from './monitor.js';
+import { verifyAgentOwnership } from './nft/agent-nft.js';
+
+// NFT requirement flag
+const REQUIRE_NFT = process.env.REQUIRE_AGENT_NFT === 'true';
 
 // -----------------------------------------------------------------------------
 // WebSocket Server Setup
@@ -124,7 +128,7 @@ function handleMessage(socket: WebSocket, message: TerminusMessage): void {
 // Auth Handler
 // -----------------------------------------------------------------------------
 
-function handleAuth(socket: WebSocket, message: AuthMessage): void {
+async function handleAuth(socket: WebSocket, message: AuthMessage): Promise<void> {
     const { nodeId, capabilities, agentTypes, wallet, secret, version } = message.payload;
 
     // Clear auth timeout
@@ -140,6 +144,24 @@ function handleAuth(socket: WebSocket, message: AuthMessage): void {
         sendAuthAck(socket, message.traceId, false, 'Invalid credentials');
         socket.close();
         return;
+    }
+
+    // NFT verification (if enabled)
+    if (REQUIRE_NFT && agentTypes?.length && wallet) {
+        logger.info('NFT', `🔍 Verifying NFT ownership for ${nodeId}...`);
+
+        for (const agentType of agentTypes) {
+            const verification = await verifyAgentOwnership(wallet, agentType);
+
+            if (!verification.valid) {
+                logger.warn('NFT', `❌ ${nodeId} rejected: wallet does not own ${agentType} NFT`);
+                sendAuthAck(socket, message.traceId, false, `NFT verification failed: ${verification.error}`);
+                socket.close();
+                return;
+            }
+
+            logger.info('NFT', `✅ ${agentType} NFT ownership verified (ID: ${verification.agentId})`);
+        }
     }
 
     // Register node
