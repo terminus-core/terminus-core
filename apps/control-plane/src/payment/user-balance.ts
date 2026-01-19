@@ -3,11 +3,15 @@
 // =============================================================================
 // Tracks user deposits and balances for pre-paid query system.
 // Users deposit USDC once, balance is deducted per successful query.
+// Balances are persisted to JSON file for durability.
 // =============================================================================
 
 import { logger } from '../logger.js';
 import { ethers } from 'ethers';
 import { getPaymentConfig } from './config.js';
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
+import { dirname, join } from 'path';
+import { fileURLToPath } from 'url';
 
 // =============================================================================
 // Types
@@ -30,11 +34,83 @@ export interface DepositRecord {
 }
 
 // =============================================================================
-// In-Memory Ledger
+// File Persistence
+// =============================================================================
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const DATA_DIR = join(__dirname, '..', '..', 'data');
+const BALANCES_FILE = join(DATA_DIR, 'user-balances.json');
+const DEPOSITS_FILE = join(DATA_DIR, 'processed-deposits.json');
+
+// Ensure data directory exists
+function ensureDataDir(): void {
+    if (!existsSync(DATA_DIR)) {
+        mkdirSync(DATA_DIR, { recursive: true });
+        logger.info('Persistence', `📁 Created data directory: ${DATA_DIR}`);
+    }
+}
+
+// Atomic write with temp file
+function atomicWriteJson(filePath: string, data: unknown): void {
+    const tempPath = filePath + '.tmp';
+    writeFileSync(tempPath, JSON.stringify(data, null, 2), 'utf-8');
+    writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf-8');
+    logger.debug('Persistence', `💾 Saved ${filePath}`);
+}
+
+// =============================================================================
+// In-Memory Ledger (with persistence)
 // =============================================================================
 
 const userBalances = new Map<string, UserBalance>();
 const processedDeposits = new Set<string>(); // Prevent double-processing
+
+// Load data from disk on startup
+function loadData(): void {
+    ensureDataDir();
+
+    // Load user balances
+    if (existsSync(BALANCES_FILE)) {
+        try {
+            const data = JSON.parse(readFileSync(BALANCES_FILE, 'utf-8')) as UserBalance[];
+            for (const user of data) {
+                userBalances.set(user.wallet.toLowerCase(), user);
+            }
+            logger.info('Persistence', `📂 Loaded ${data.length} user balances from disk`);
+        } catch (error) {
+            logger.error('Persistence', `❌ Failed to load balances: ${(error as Error).message}`);
+        }
+    }
+
+    // Load processed deposits
+    if (existsSync(DEPOSITS_FILE)) {
+        try {
+            const data = JSON.parse(readFileSync(DEPOSITS_FILE, 'utf-8')) as string[];
+            for (const txHash of data) {
+                processedDeposits.add(txHash);
+            }
+            logger.info('Persistence', `📂 Loaded ${data.length} processed deposits from disk`);
+        } catch (error) {
+            logger.error('Persistence', `❌ Failed to load deposits: ${(error as Error).message}`);
+        }
+    }
+}
+
+// Save data to disk
+function saveData(): void {
+    ensureDataDir();
+
+    try {
+        atomicWriteJson(BALANCES_FILE, Array.from(userBalances.values()));
+        atomicWriteJson(DEPOSITS_FILE, Array.from(processedDeposits));
+    } catch (error) {
+        logger.error('Persistence', `❌ Failed to save data: ${(error as Error).message}`);
+    }
+}
+
+// Load on module init
+loadData();
 
 // USDC ABI for reading transfer events
 const USDC_ABI = [
@@ -87,6 +163,7 @@ export function deductBalance(wallet: string, amount: number): boolean {
     user.totalSpent += amount;
     user.lastActivity = Date.now();
 
+    saveData(); // Persist to disk
     logger.info('UserBalance', `💸 Deducted $${amount.toFixed(4)} from ${wallet.slice(0, 10)}... (Remaining: $${user.balance.toFixed(4)})`);
     return true;
 }
@@ -107,6 +184,7 @@ export function creditBalance(wallet: string, amount: number, txHash?: string): 
         });
     }
 
+    saveData(); // Persist to disk
     logger.info('UserBalance', `💰 Credited $${amount.toFixed(4)} to ${wallet.slice(0, 10)}... (New Balance: $${user.balance.toFixed(4)})`);
 }
 
