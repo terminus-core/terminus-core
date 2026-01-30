@@ -8,6 +8,7 @@
 import { nodeRegistry } from './registry.js';
 import { logger } from './logger.js';
 import { isSupabaseEnabled, insertLog as insertLogToDB, createJob, completeJob as completeJobInDB, getGlobalJobStats } from './database.js';
+import { getWalletStats } from './payment/index.js';
 
 // =============================================================================
 // Types
@@ -243,6 +244,9 @@ export function getMonitoringSummary() {
         ? nodes.reduce((sum, n) => sum + n.metrics.totalJobsCompleted, 0) / totalJobs * 100
         : 100;
 
+    // Get agent earnings
+    const walletStats = getWalletStats();
+
     return {
         timestamp: Date.now(),
         nodes: {
@@ -255,6 +259,11 @@ export function getMonitoringSummary() {
         jobs: {
             total: totalJobs,
             successRate: Math.round(successRate * 100) / 100,
+        },
+        earnings: {
+            totalAgentEarnings: walletStats.totalEarnings,
+            agentCount: walletStats.agentCount,
+            perAgent: walletStats.wallets,
         },
         recentLogs: getLogs({ limit: 10 }),
     };
