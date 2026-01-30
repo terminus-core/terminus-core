@@ -33,17 +33,17 @@ Terminus prioritizes data integrity over speed. To prevent "trash info" and spam
 
 ```mermaid
 graph TD
-    User[User (Web Client)] -->|1. Top-up & Query| Orch[Orchestrator Node]
-    Orch -->|2. Discovery (ERC-8004)| Registry[On-Chain Registry]
+    User["User (Web Client)"] -->|1. Top-up & Query| Orch["Orchestrator Node"]
+    Orch -->|2. Discovery (ERC-8004)| Registry["On-Chain Registry"]
     Registry -->|3. Return Active Agents| Orch
-    Orch -->|4. Request Task| Agent[Operator Node]
+    Orch -->|4. Request Task| Agent["Operator Node"]
     
     %% The Critical "Verify First" Loop
     Agent -->|5. Execute & Return Data| Orch
-    Orch -->|6. VALIDATION ENGINE| Valid{Is Data Valid?}
+    Orch -->|6. VALIDATION ENGINE| Valid{"Is Data Valid?"}
     
-    Valid -- No (Trash Info) --> Reject[Discard & Penalize]
-    Valid -- Yes (Quality Data) --> Pay[Trigger x402 Payment]
+    Valid -- No (Trash Info) --> Reject["Discard & Penalize"]
+    Valid -- Yes (Quality Data) --> Pay["Trigger x402 Payment"]
     
     Pay -->|7. 50% Revenue Share| Agent
     Pay -->|8. Deliver Final Response| User
