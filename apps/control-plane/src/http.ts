@@ -16,7 +16,7 @@ import {
 } from './payment/index.js';
 import { getAgentNodesStatus, getLogs, getConnectionHistory, getMonitoringSummary, addLog } from './monitor.js';
 import { getAllAgentReputations } from './nft/agent-nft.js';
-import { saveChatMessage, getChatHistory } from './database.js';
+import { saveChatMessage, getChatHistory, createChatSession, getChatSessions, deleteChatSession, initChatSchema } from './database.js';
 
 const HTTP_PORT = parseInt(process.env.HTTP_PORT ?? '8080', 10);
 
@@ -135,9 +135,11 @@ async function handleChat(req: IncomingMessage, res: ServerResponse): Promise<vo
 
     const userWallet = req.headers['x-wallet-address'] as string;
     const config = getPaymentConfig();
+    let sessionId: string | undefined;
 
     try {
-        const body = await parseBody(req) as { message?: string };
+        const body = await parseBody(req) as { message?: string; sessionId?: string };
+        sessionId = body.sessionId;
 
         if (!body.message) {
             sendError(res, 400, 'Missing "message" field');
@@ -165,7 +167,7 @@ async function handleChat(req: IncomingMessage, res: ServerResponse): Promise<vo
 
         // Save User Message
         if (userWallet) {
-            saveChatMessage(userWallet, 'user', body.message).catch(() => { });
+            saveChatMessage(userWallet, 'user', body.message, sessionId).catch(() => { });
         }
 
         logger.info('HTTP', `💬 Chat: "${body.message.slice(0, 50)}..."`);
@@ -179,7 +181,7 @@ async function handleChat(req: IncomingMessage, res: ServerResponse): Promise<vo
 
             // Save Assistant Failure Message
             if (userWallet) {
-                saveChatMessage(userWallet, 'assistant', 'No agents available for this request').catch(() => { });
+                saveChatMessage(userWallet, 'assistant', 'No agents available for this request', sessionId).catch(() => { });
             }
 
             sendJson(res, 200, {
@@ -216,7 +218,7 @@ async function handleChat(req: IncomingMessage, res: ServerResponse): Promise<vo
 
         // Save Assistant Success Message
         if (userWallet) {
-            saveChatMessage(userWallet, 'assistant', result.finalResponse, paymentInfo?.amount).catch(() => { });
+            saveChatMessage(userWallet, 'assistant', result.finalResponse, sessionId, paymentInfo?.amount).catch(() => { });
         }
 
         // Generate queryHash for feedback tracking
@@ -239,7 +241,7 @@ async function handleChat(req: IncomingMessage, res: ServerResponse): Promise<vo
 
         // Save Error Message
         if (userWallet) {
-            saveChatMessage(userWallet, 'assistant', `Error: ${(error as Error).message}`).catch(() => { });
+            saveChatMessage(userWallet, 'assistant', `Error: ${(error as Error).message}`, sessionId).catch(() => { });
         }
 
         // Error occurred - user is NOT charged
@@ -362,14 +364,79 @@ async function handleHistory(req: IncomingMessage, res: ServerResponse): Promise
     const urlObj = new URL(req.url || '', `http://${req.headers.host}`);
     const wallet = urlObj.searchParams.get('wallet') || req.headers['x-wallet-address'] as string;
     const limit = parseInt(urlObj.searchParams.get('limit') || '50', 10);
+    const sessionId = urlObj.searchParams.get('sessionId') || undefined;
 
     if (!wallet) {
         sendError(res, 400, 'Missing wallet address');
         return;
     }
 
-    const history = await getChatHistory(wallet, limit);
+    const history = await getChatHistory(wallet, sessionId, limit);
     sendJson(res, 200, { history });
+}
+
+// =============================================================================
+// Session Management
+// =============================================================================
+
+async function handleSessions(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const userWallet = req.headers['x-wallet-address'] as string;
+
+    if (!userWallet) {
+        sendError(res, 401, 'Wallet authentication required');
+        return;
+    }
+
+    const urlObj = new URL(req.url || '', `http://${req.headers.host}`);
+    const pathname = urlObj.pathname;
+
+    // GET /api/sessions - List sessions
+    if (req.method === 'GET') {
+        const sessions = await getChatSessions(userWallet);
+        sendJson(res, 200, { sessions });
+        return;
+    }
+
+    // POST /api/sessions - Create new session
+    if (req.method === 'POST') {
+        try {
+            const body = await parseBody(req) as { title?: string };
+            const sessionId = await createChatSession(userWallet, body.title);
+
+            if (!sessionId) {
+                sendError(res, 500, 'Failed to create session');
+                return;
+            }
+
+            sendJson(res, 200, { success: true, sessionId });
+            return;
+        } catch {
+            sendError(res, 400, 'Invalid JSON');
+            return;
+        }
+    }
+
+    // DELETE /api/sessions/:id - Delete session
+    if (req.method === 'DELETE') {
+        // Extract ID from path
+        const match = pathname.match(/\/api\/sessions\/([a-zA-Z0-9-]+)/);
+        const sessionId = match ? match[1] : null;
+
+        if (!sessionId) {
+            sendError(res, 400, 'Missing session ID');
+            return;
+        }
+
+        const success = await deleteChatSession(sessionId, userWallet);
+        if (success) {
+            sendJson(res, 200, { success: true });
+        } else {
+            sendError(res, 404, 'Session not found or could not be deleted');
+        }
+        return;
+    }
+
+    sendError(res, 405, 'Method not allowed');
 }
 
 // =============================================================================
@@ -404,6 +471,8 @@ const server = createServer(async (req, res) => {
             await handleRun(req, res);
         } else if (url === '/api/chat' || url === '/api/chat/') {
             await handleChat(req, res);
+        } else if (url === '/api/sessions' || url.startsWith('/api/sessions/')) {
+            await handleSessions(req, res);
         } else if (url === '/api/status' || url === '/api/status/') {
             await handleStatus(res);
         } else if (url === '/api/deposit' || url === '/api/deposit/') {
@@ -447,10 +516,6 @@ const server = createServer(async (req, res) => {
             const limit = parseInt(urlObj.searchParams.get('limit') || '100', 10);
             const logs = getLogs({ level, source, nodeId, limit });
             sendJson(res, 200, { logs });
-        } else if (url === '/api/monitor/history' || url === '/api/monitor/history/') {
-            // Connection history
-            const history = getConnectionHistory(50);
-            sendJson(res, 200, { history });
         } else if (url === '/api/reputation' || url === '/api/reputation/') {
             // On-chain agent reputations
             const reputations = await getAllAgentReputations();

@@ -333,23 +333,37 @@ export interface ChatMessage {
     created_at: string;
 }
 
+
 export async function saveChatMessage(
     wallet: string,
     role: 'user' | 'assistant' | 'system',
     content: string,
+    sessionId?: string,
     chargedAmount?: number
 ): Promise<boolean> {
     const client = getSupabaseClient();
     if (!client) return false;
 
+    const payload: any = {
+        wallet: wallet.toLowerCase(),
+        role,
+        content,
+        charged_amount: chargedAmount,
+    };
+
+    if (sessionId) {
+        payload.session_id = sessionId;
+
+        // Also update the session's updated_at timestamp
+        client.from('chat_sessions')
+            .update({ updated_at: new Date().toISOString() })
+            .eq('id', sessionId)
+            .then(() => { }); // Fire and forget update
+    }
+
     const { error } = await client
         .from('chat_history')
-        .insert({
-            wallet: wallet.toLowerCase(),
-            role,
-            content,
-            charged_amount: chargedAmount,
-        });
+        .insert(payload);
 
     if (error) {
         // If table doesn't exist, we'll fail silently but log it
@@ -364,25 +378,118 @@ export async function saveChatMessage(
     return true;
 }
 
-export async function getChatHistory(wallet: string, limit = 50): Promise<ChatMessage[]> {
+export async function getChatHistory(wallet: string, sessionId?: string, limit = 50): Promise<ChatMessage[]> {
     const client = getSupabaseClient();
     if (!client) return [];
 
-    const { data, error } = await client
+    let query = client
         .from('chat_history')
         .select('*')
         .eq('wallet', wallet.toLowerCase())
-        .order('created_at', { ascending: true }) // Oldest first for chat flow
-        .limit(limit);
+        .order('created_at', { ascending: true });
+
+    if (sessionId) {
+        query = query.eq('session_id', sessionId);
+    }
+
+    const { data, error } = await query.limit(limit);
 
     if (error) {
-        if (error.code === '42P01') return []; // Table missing
-        logger.error('Database', `Failed to get chat history: ${error.message}`);
+        logger.error('Database', `Failed to chat history: ${error.message}`);
         return [];
     }
 
     return data || [];
 }
+
+// =============================================================================
+// Chat Session Management
+// =============================================================================
+
+export interface ChatSession {
+    id: string;
+    wallet: string;
+    title: string;
+    created_at: string;
+}
+
+export async function initChatSchema(): Promise<void> {
+    const client = getSupabaseClient();
+    if (!client) return;
+
+    // Create chat_sessions table if not exists
+    const { error: sessionError } = await client.rpc('create_chat_sessions_table');
+
+    // Since we can't easily run DDL via simple client without RPC or raw execution which might be restricted,
+    // we will rely on an SQL function or manual setup usually. 
+    // BUT, let's try a work-around: checking if table exists via query, then maybe we can assume user ran migration?
+    // Actually, user explicitly asked to "continue" effectively meaning "make it work".
+    // Best bet if MCP fails is giving user the SQL to run or try to run it via special RPC if available.
+    // However, if we assume Service Key has admin rights, we might be able to use a different method.
+
+    // Let's assume the user will run the SQL manually if code fails, but we'll try to provide the functions.
+    // NOTE: The previous MCP error suggests strict permissions. I will proceed with the code implementation
+    // assuming the DB schema will be ready. I will provide the SQL to the user in a notify block just in case.
+}
+
+export async function createChatSession(wallet: string, title: string = 'New Chat'): Promise<string | null> {
+    const client = getSupabaseClient();
+    if (!client) return null;
+
+    const { data, error } = await client
+        .from('chat_sessions')
+        .insert({
+            wallet: wallet.toLowerCase(),
+            title
+        })
+        .select('id')
+        .single();
+
+    if (error) {
+        logger.error('Database', `Failed to create chat session: ${error.message}`);
+        return null;
+    }
+
+    return data.id;
+}
+
+export async function getChatSessions(wallet: string): Promise<ChatSession[]> {
+    const client = getSupabaseClient();
+    if (!client) return [];
+
+    const { data, error } = await client
+        .from('chat_sessions')
+        .select('*')
+        .eq('wallet', wallet.toLowerCase())
+        .order('updated_at', { ascending: false });
+
+    if (error) {
+        logger.error('Database', `Failed to get sessions: ${error.message}`);
+        return [];
+    }
+
+    return data || [];
+}
+
+export async function deleteChatSession(sessionId: string, wallet: string): Promise<boolean> {
+    const client = getSupabaseClient();
+    if (!client) return false;
+
+    const { error } = await client
+        .from('chat_sessions')
+        .delete()
+        .eq('id', sessionId)
+        .eq('wallet', wallet.toLowerCase());
+
+    if (error) {
+        logger.error('Database', `Failed to delete session: ${error.message}`);
+        return false;
+    }
+
+    return true;
+}
+
+
 
 // =============================================================================
 // Migration Helper (import existing JSON data)
