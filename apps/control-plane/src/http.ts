@@ -16,6 +16,7 @@ import {
 } from './payment/index.js';
 import { getAgentNodesStatus, getLogs, getConnectionHistory, getMonitoringSummary, addLog } from './monitor.js';
 import { getAllAgentReputations } from './nft/agent-nft.js';
+import { saveChatMessage, getChatHistory } from './database.js';
 
 const HTTP_PORT = parseInt(process.env.HTTP_PORT ?? '8080', 10);
 
@@ -162,6 +163,11 @@ async function handleChat(req: IncomingMessage, res: ServerResponse): Promise<vo
             }
         }
 
+        // Save User Message
+        if (userWallet) {
+            saveChatMessage(userWallet, 'user', body.message).catch(() => { });
+        }
+
         logger.info('HTTP', `💬 Chat: "${body.message.slice(0, 50)}..."`);
 
         // Execute multi-agent flow
@@ -170,6 +176,12 @@ async function handleChat(req: IncomingMessage, res: ServerResponse): Promise<vo
         // Check if execution was successful (at least one agent responded)
         if (!result.success || result.agentResults.length === 0) {
             logger.warn('HTTP', `⚠️ No agents responded - NOT charging user`);
+
+            // Save Assistant Failure Message
+            if (userWallet) {
+                saveChatMessage(userWallet, 'assistant', 'No agents available for this request').catch(() => { });
+            }
+
             sendJson(res, 200, {
                 success: false,
                 message: result.finalResponse || 'No agents available for this request',
@@ -202,6 +214,11 @@ async function handleChat(req: IncomingMessage, res: ServerResponse): Promise<vo
             }
         }
 
+        // Save Assistant Success Message
+        if (userWallet) {
+            saveChatMessage(userWallet, 'assistant', result.finalResponse, paymentInfo?.amount).catch(() => { });
+        }
+
         // Generate queryHash for feedback tracking
         const queryHash = Buffer.from(`${Date.now()}-${body.message.slice(0, 20)}`).toString('base64').slice(0, 16);
 
@@ -219,6 +236,12 @@ async function handleChat(req: IncomingMessage, res: ServerResponse): Promise<vo
         });
     } catch (error) {
         logger.error('HTTP', `Chat error: ${(error as Error).message}`);
+
+        // Save Error Message
+        if (userWallet) {
+            saveChatMessage(userWallet, 'assistant', `Error: ${(error as Error).message}`).catch(() => { });
+        }
+
         // Error occurred - user is NOT charged
         sendError(res, 500, (error as Error).message);
     }
@@ -332,6 +355,24 @@ async function handleBalance(req: IncomingMessage, res: ServerResponse): Promise
 }
 
 // =============================================================================
+// Get Chat History
+// =============================================================================
+
+async function handleHistory(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const urlObj = new URL(req.url || '', `http://${req.headers.host}`);
+    const wallet = urlObj.searchParams.get('wallet') || req.headers['x-wallet-address'] as string;
+    const limit = parseInt(urlObj.searchParams.get('limit') || '50', 10);
+
+    if (!wallet) {
+        sendError(res, 400, 'Missing wallet address');
+        return;
+    }
+
+    const history = await getChatHistory(wallet, limit);
+    sendJson(res, 200, { history });
+}
+
+// =============================================================================
 // HTTP Server
 // =============================================================================
 
@@ -371,6 +412,8 @@ const server = createServer(async (req, res) => {
             await handleFeedback(req, res);
         } else if (url.startsWith('/api/balance')) {
             await handleBalance(req, res);
+        } else if (url.startsWith('/api/history')) {
+            await handleHistory(req, res);
         } else if (url === '/api/payments' || url === '/api/payments/') {
             // Payment stats endpoint
             const paymentStats = getPaymentStats();
@@ -390,7 +433,7 @@ const server = createServer(async (req, res) => {
         } else if (url === '/api/monitor' || url === '/api/monitor/') {
             // Monitoring summary
             const summary = getMonitoringSummary();
-            sendJson(res, 200, summary);
+            sendJson(res, 200, { summary });
         } else if (url === '/api/monitor/nodes' || url === '/api/monitor/nodes/') {
             // Agent nodes status
             const nodes = getAgentNodesStatus();

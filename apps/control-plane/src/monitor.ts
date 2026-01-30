@@ -2,24 +2,12 @@
 // TERMINUS CONTROL PLANE - Agent Monitor
 // =============================================================================
 // Tracks agent node status, connection history, and job metrics.
+// Storage: Supabase PostgreSQL
 // =============================================================================
 
 import { nodeRegistry } from './registry.js';
 import { logger } from './logger.js';
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
-import { join, dirname } from 'path';
-import { fileURLToPath } from 'url';
 import { isSupabaseEnabled, insertLog as insertLogToDB, createJob, completeJob as completeJobInDB, getGlobalJobStats } from './database.js';
-
-// Persistence file path
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const DATA_DIR = join(__dirname, '../../data');
-const STATS_FILE = join(DATA_DIR, 'job-stats.json');
-
-// Ensure data directory exists
-if (!existsSync(DATA_DIR)) {
-    mkdirSync(DATA_DIR, { recursive: true });
-}
 
 // =============================================================================
 // Types
@@ -52,44 +40,34 @@ export interface LogEntry {
 }
 
 // =============================================================================
-// Persistent Storage
+// In-Memory Storage (synced with DB)
 // =============================================================================
 
-interface PersistedStats {
-    nodeJobStats: Record<string, { completed: number; failed: number }>;
-    globalStats: { totalCompleted: number; totalFailed: number };
-}
+// Job stats per node
+const nodeJobStats = new Map<string, { completed: number; failed: number }>();
 
-function loadStats(): PersistedStats {
-    try {
-        if (existsSync(STATS_FILE)) {
-            const data = readFileSync(STATS_FILE, 'utf-8');
-            return JSON.parse(data);
-        }
-    } catch (error) {
-        logger.warn('Monitor', 'Could not load persisted stats, starting fresh');
-    }
-    return { nodeJobStats: {}, globalStats: { totalCompleted: 0, totalFailed: 0 } };
-}
+// Global stats
+const globalStats = { totalCompleted: 0, totalFailed: 0 };
 
-function saveStats(): void {
+// Load stats from Supabase on startup
+async function loadStats(): Promise<void> {
+    if (!isSupabaseEnabled()) return;
+
     try {
-        const data: PersistedStats = {
-            nodeJobStats: Object.fromEntries(nodeJobStats),
-            globalStats,
-        };
-        writeFileSync(STATS_FILE, JSON.stringify(data, null, 2));
+        const stats = await getGlobalJobStats();
+        globalStats.totalCompleted = stats.totalCompleted;
+        globalStats.totalFailed = stats.totalFailed;
+        logger.info('Monitor', `📂 Loaded global job stats: ${stats.totalCompleted} completed, ${stats.totalFailed} failed`);
+
+        // Note: Individual node stats are not fully reloaded here to avoid complexity,
+        // but new jobs will be tracked correctly in DB.
     } catch (error) {
-        logger.error('Monitor', `Failed to save stats: ${(error as Error).message}`);
+        logger.warn('Monitor', 'Could not load stats from DB');
     }
 }
 
-// Load persisted stats on startup
-const persistedStats = loadStats();
-const nodeJobStats = new Map<string, { completed: number; failed: number }>(
-    Object.entries(persistedStats.nodeJobStats)
-);
-const globalStats = persistedStats.globalStats;
+// Initialize stats
+loadStats();
 
 // Centralized log buffer (last N entries)
 const MAX_LOGS = 500;
@@ -192,7 +170,7 @@ export function recordNodeDisconnection(nodeId: string): void {
     addLog('WARN', 'Monitor', `Node ${nodeId} disconnected`, nodeId);
 }
 
-export function recordJobComplete(nodeId: string, success: boolean): void {
+export function recordJobComplete(nodeId: string, success: boolean, jobId?: string): void {
     const stats = nodeJobStats.get(nodeId) || { completed: 0, failed: 0 };
     if (success) {
         stats.completed++;
@@ -202,7 +180,11 @@ export function recordJobComplete(nodeId: string, success: boolean): void {
         globalStats.totalFailed++;
     }
     nodeJobStats.set(nodeId, stats);
-    saveStats();
+
+    // Persist to Supabase
+    if (isSupabaseEnabled() && jobId) {
+        completeJobInDB(jobId, success).catch(() => { });
+    }
 }
 
 // =============================================================================

@@ -3,15 +3,12 @@
 // =============================================================================
 // Tracks user deposits and balances for pre-paid query system.
 // Users deposit USDC once, balance is deducted per successful query.
-// Primary: Supabase PostgreSQL | Fallback: JSON files
+// Storage: Supabase PostgreSQL
 // =============================================================================
 
 import { logger } from '../logger.js';
 import { ethers } from 'ethers';
 import { getPaymentConfig } from './config.js';
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
-import { dirname, join } from 'path';
-import { fileURLToPath } from 'url';
 import {
     isSupabaseEnabled,
     getUserBalanceFromDB,
@@ -19,6 +16,7 @@ import {
     getAllUserBalancesFromDB,
     recordDeposit,
     isDepositProcessed,
+    getAllUserBalancesFromDB as loadBalancesFromDB
 } from '../database.js';
 
 // =============================================================================
@@ -42,83 +40,44 @@ export interface DepositRecord {
 }
 
 // =============================================================================
-// File Persistence
-// =============================================================================
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-const DATA_DIR = join(__dirname, '..', '..', 'data');
-const BALANCES_FILE = join(DATA_DIR, 'user-balances.json');
-const DEPOSITS_FILE = join(DATA_DIR, 'processed-deposits.json');
-
-// Ensure data directory exists
-function ensureDataDir(): void {
-    if (!existsSync(DATA_DIR)) {
-        mkdirSync(DATA_DIR, { recursive: true });
-        logger.info('Persistence', `📁 Created data directory: ${DATA_DIR}`);
-    }
-}
-
-// Atomic write with temp file
-function atomicWriteJson(filePath: string, data: unknown): void {
-    const tempPath = filePath + '.tmp';
-    writeFileSync(tempPath, JSON.stringify(data, null, 2), 'utf-8');
-    writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf-8');
-    logger.debug('Persistence', `💾 Saved ${filePath}`);
-}
-
-// =============================================================================
-// In-Memory Ledger (with persistence)
+// In-Memory Ledger (synced with DB)
 // =============================================================================
 
 const userBalances = new Map<string, UserBalance>();
 const processedDeposits = new Set<string>(); // Prevent double-processing
 
-// Load data from disk on startup
-function loadData(): void {
-    ensureDataDir();
-
-    // Load user balances
-    if (existsSync(BALANCES_FILE)) {
-        try {
-            const data = JSON.parse(readFileSync(BALANCES_FILE, 'utf-8')) as UserBalance[];
-            for (const user of data) {
-                userBalances.set(user.wallet.toLowerCase(), user);
-            }
-            logger.info('Persistence', `📂 Loaded ${data.length} user balances from disk`);
-        } catch (error) {
-            logger.error('Persistence', `❌ Failed to load balances: ${(error as Error).message}`);
-        }
+// Load data from Supabase on startup
+async function loadData(): Promise<void> {
+    if (!isSupabaseEnabled()) {
+        logger.warn('Persistence', 'Supabase not enabled - running in memory only (data will be lost on restart)');
+        return;
     }
-
-    // Load processed deposits
-    if (existsSync(DEPOSITS_FILE)) {
-        try {
-            const data = JSON.parse(readFileSync(DEPOSITS_FILE, 'utf-8')) as string[];
-            for (const txHash of data) {
-                processedDeposits.add(txHash);
-            }
-            logger.info('Persistence', `📂 Loaded ${data.length} processed deposits from disk`);
-        } catch (error) {
-            logger.error('Persistence', `❌ Failed to load deposits: ${(error as Error).message}`);
-        }
-    }
-}
-
-// Save data to disk
-function saveData(): void {
-    ensureDataDir();
 
     try {
-        atomicWriteJson(BALANCES_FILE, Array.from(userBalances.values()));
-        atomicWriteJson(DEPOSITS_FILE, Array.from(processedDeposits));
+        const balances = await getAllUserBalancesFromDB();
+        for (const user of balances) {
+            userBalances.set(user.wallet.toLowerCase(), {
+                wallet: user.wallet,
+                balance: user.balance,
+                totalDeposited: user.total_deposited,
+                totalSpent: user.total_spent,
+                depositHistory: [], // History not fully loaded to save memory
+                lastActivity: new Date(user.updated_at).getTime()
+            });
+        }
+        logger.info('Persistence', `📂 Loaded ${balances.length} user balances from Supabase`);
     } catch (error) {
-        logger.error('Persistence', `❌ Failed to save data: ${(error as Error).message}`);
+        logger.error('Persistence', `❌ Failed to load balances: ${(error as Error).message}`);
     }
 }
 
-// Load on module init
-loadData();
+// Save data (noop - handled per action)
+function saveData(): void {
+    // No-op: Data is saved to Supabase immediately on change
+}
+
+// Load on module init (delayed to ensure env vars are loaded)
+setTimeout(loadData, 1000);
 
 // USDC ABI for reading transfer events
 const USDC_ABI = [

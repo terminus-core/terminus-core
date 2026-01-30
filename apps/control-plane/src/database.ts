@@ -56,19 +56,18 @@ export interface JobStats {
 // Supabase Client
 // =============================================================================
 
-const SUPABASE_URL = process.env.SUPABASE_URL || 'https://ijotpaarjetskwzjacma.supabase.co';
-const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY || '';
-
 let supabase: SupabaseClient | null = null;
 
 export function getSupabaseClient(): SupabaseClient | null {
-    if (!SUPABASE_KEY) {
-        logger.warn('Database', 'Supabase key not configured, falling back to JSON storage');
+    const key = process.env.SUPABASE_SERVICE_KEY;
+    const url = process.env.SUPABASE_URL || 'https://ijotpaarjetskwzjacma.supabase.co';
+
+    if (!key) {
         return null;
     }
 
     if (!supabase) {
-        supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+        supabase = createClient(url, key);
         logger.info('Database', '🔌 Connected to Supabase');
     }
 
@@ -76,7 +75,7 @@ export function getSupabaseClient(): SupabaseClient | null {
 }
 
 export function isSupabaseEnabled(): boolean {
-    return !!SUPABASE_KEY;
+    return !!process.env.SUPABASE_SERVICE_KEY;
 }
 
 // =============================================================================
@@ -315,6 +314,70 @@ export async function getLogs(options?: {
 
     if (error) {
         logger.error('Database', `Failed to get logs: ${error.message}`);
+        return [];
+    }
+
+    return data || [];
+}
+
+// =============================================================================
+// Chat History Operations
+// =============================================================================
+
+export interface ChatMessage {
+    id: number;
+    wallet: string;
+    role: 'user' | 'assistant' | 'system';
+    content: string;
+    charged_amount?: number;
+    created_at: string;
+}
+
+export async function saveChatMessage(
+    wallet: string,
+    role: 'user' | 'assistant' | 'system',
+    content: string,
+    chargedAmount?: number
+): Promise<boolean> {
+    const client = getSupabaseClient();
+    if (!client) return false;
+
+    const { error } = await client
+        .from('chat_history')
+        .insert({
+            wallet: wallet.toLowerCase(),
+            role,
+            content,
+            charged_amount: chargedAmount,
+        });
+
+    if (error) {
+        // If table doesn't exist, we'll fail silently but log it
+        if (error.code === '42P01') {
+            logger.warn('Database', 'Chat history table missing - skipping persistence');
+            return false;
+        }
+        logger.error('Database', `Failed to save chat: ${error.message}`);
+        return false;
+    }
+
+    return true;
+}
+
+export async function getChatHistory(wallet: string, limit = 50): Promise<ChatMessage[]> {
+    const client = getSupabaseClient();
+    if (!client) return [];
+
+    const { data, error } = await client
+        .from('chat_history')
+        .select('*')
+        .eq('wallet', wallet.toLowerCase())
+        .order('created_at', { ascending: true }) // Oldest first for chat flow
+        .limit(limit);
+
+    if (error) {
+        if (error.code === '42P01') return []; // Table missing
+        logger.error('Database', `Failed to get chat history: ${error.message}`);
         return [];
     }
 

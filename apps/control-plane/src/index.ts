@@ -32,6 +32,7 @@ import { handleJobResult } from './dispatcher.js';
 import { startHttpServer, stopHttpServer } from './http.js';
 import { recordNodeConnection, recordNodeDisconnection, recordJobComplete, addLog } from './monitor.js';
 import { verifyAgentOwnership, verifyWalletSignature } from './nft/agent-nft.js';
+import { createJob } from './database.js';
 
 // NFT requirement flag
 const REQUIRE_NFT = process.env.REQUIRE_AGENT_NFT === 'true';
@@ -331,6 +332,9 @@ export function dispatchAgentJob(
         socket.send(JSON.stringify(message));
         logger.info('AgentDispatch', `📤 Job ${jobId} sent to ${node.nodeId} for ${agentType}`);
         addLog('INFO', 'JobDispatch', `Job ${jobId} dispatched to ${node.nodeId} for agent: ${agentType}`, node.nodeId, jobId);
+
+        // Persist job to DB
+        createJob(jobId, node.nodeId, agentType).catch(() => { });
     });
 }
 
@@ -349,7 +353,7 @@ function handleAgentJobResult(socket: WebSocket, message: AgentJobResultMessage)
     // Track job completion stats
     const nodeId = nodeRegistry.findNodeIdBySocket(socket);
     if (nodeId) {
-        recordJobComplete(nodeId, success);
+        recordJobComplete(nodeId, success, jobId);
     }
 
     if (success) {
