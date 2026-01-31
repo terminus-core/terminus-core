@@ -1,0 +1,12 @@
+{
+    "name": "terminus-core",
+    "version": "1.0.0",
+    "private": true,
+    "description": "Terminus Core - Control Plane and Agent Infrastructure",
+    "scripts": {
+        "dev": "pnpm --filter @terminus/control-plane dev",
+        "build": "pnpm --filter @terminus/control-plane build",
+        "start": "pnpm --filter @terminus/control-plane start"
+    },
+    "packageManager": "pnpm@10.28.2"
+}
