@@ -179,15 +179,27 @@ async function handleChat(req: IncomingMessage, res: ServerResponse): Promise<vo
         if (!result.success || result.agentResults.length === 0) {
             logger.warn('HTTP', `⚠️ No agents responded - NOT charging user`);
 
+            // Build helpful message with available agents
+            let helpMessage = 'No agents available for this request.';
+            if (result.availableAgents && result.availableAgents.length > 0) {
+                const agentList = result.availableAgents
+                    .map(a => `• **${a.name}** - ${a.description}`)
+                    .join('\n');
+                helpMessage = `I couldn't find an agent to handle your specific request.\n\n**Currently available agents:**\n${agentList}\n\nTry asking about topics these agents specialize in!`;
+            } else {
+                helpMessage = 'No agents are currently connected to the network. Please try again later or check if any agent nodes are running.';
+            }
+
             // Save Assistant Failure Message
             if (userWallet) {
-                saveChatMessage(userWallet, 'assistant', 'No agents available for this request', sessionId).catch(() => { });
+                saveChatMessage(userWallet, 'assistant', helpMessage, sessionId).catch(() => { });
             }
 
             sendJson(res, 200, {
                 success: false,
-                message: result.finalResponse || 'No agents available for this request',
+                message: helpMessage,
                 agentsUsed: result.agentsUsed,
+                availableAgents: result.availableAgents,
                 charged: false,
             });
             return;
@@ -516,6 +528,10 @@ const server = createServer(async (req, res) => {
             const limit = parseInt(urlObj.searchParams.get('limit') || '100', 10);
             const logs = getLogs({ level, source, nodeId, limit });
             sendJson(res, 200, { logs });
+        } else if (url === '/api/monitor/history' || url === '/api/monitor/history/') {
+            // Connection history
+            const history = getConnectionHistory(100);
+            sendJson(res, 200, { history });
         } else if (url === '/api/reputation' || url === '/api/reputation/') {
             // On-chain agent reputations
             const reputations = await getAllAgentReputations();

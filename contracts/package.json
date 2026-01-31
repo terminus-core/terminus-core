@@ -1,0 +1,15 @@
+{
+  "name": "terminus-contracts",
+  "version": "1.0.0",
+  "description": "Terminus Agent NFT Contracts",
+  "type": "module",
+  "scripts": {
+    "compile": "node scripts/compile.js",
+    "deploy": "node scripts/deploy.js"
+  },
+  "dependencies": {
+    "ethers": "^6.13.0",
+    "solc": "^0.8.28",
+    "dotenv": "^17.2.3"
+  }
+}

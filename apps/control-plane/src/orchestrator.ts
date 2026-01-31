@@ -84,6 +84,7 @@ export interface MultiAgentResponse {
     agentsUsed: string[];
     agentResults: AgentExecutionResult[];
     finalResponse: string;
+    availableAgents?: { id: string; name: string; description: string }[];
 }
 
 // =============================================================================
@@ -246,6 +247,31 @@ Provide a helpful summary.`,
 export async function executeMultiAgent(userMessage: string): Promise<MultiAgentResponse> {
     logger.info('Orchestrator', `🚀 Multi-agent execution for: "${userMessage.slice(0, 50)}..."`);
 
+    // Get all connected/available agents for helpful fallback message
+    const getConnectedAgents = (): { id: string; name: string; description: string }[] => {
+        if (isLocalAgentsMode()) {
+            // Local mode: all agents are available
+            return AGENTS.map(a => ({ id: a.id, name: a.name, description: a.description }));
+        } else {
+            // Remote mode: only agents with connected nodes (check agentTypes, not capabilities)
+            const connectedAgentIds = new Set<string>();
+            for (const node of nodeRegistry.getOnlineNodes()) {
+                // agentTypes contains the actual agent IDs like 'health-advisor'
+                if (node.agentTypes) {
+                    for (const agentType of node.agentTypes) {
+                        connectedAgentIds.add(agentType);
+                    }
+                }
+            }
+            logger.info('Orchestrator', `📋 Connected agent types: [${Array.from(connectedAgentIds).join(', ')}]`);
+            return AGENTS
+                .filter(a => connectedAgentIds.has(a.id))
+                .map(a => ({ id: a.id, name: a.name, description: a.description }));
+        }
+    };
+
+    const availableAgents = getConnectedAgents();
+
     // Step 1: Analyze intent
     const intent = await analyzeIntent(userMessage);
 
@@ -256,6 +282,7 @@ export async function executeMultiAgent(userMessage: string): Promise<MultiAgent
             agentsUsed: [],
             agentResults: [],
             finalResponse: 'No suitable agents found for your request.',
+            availableAgents,
         };
     }
 
@@ -295,6 +322,18 @@ export async function executeMultiAgent(userMessage: string): Promise<MultiAgent
 
     const results = await Promise.all(agentPromises);
     const agentResults = results.filter((r): r is AgentExecutionResult => r !== null);
+
+    // No agents actually executed? Return with available agents for helpful message
+    if (agentResults.length === 0) {
+        return {
+            success: false,
+            userMessage,
+            agentsUsed: intent.selectedAgents,
+            agentResults: [],
+            finalResponse: '',
+            availableAgents,
+        };
+    }
 
     // Step 3: Aggregate results
     const finalResponse = await aggregateResults(userMessage, agentResults);
